@@ -3,10 +3,9 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-# 1. Page Config - FIX: Use correct HTML argument
+# 1. Page Config
 st.set_page_config(page_title="City Analytics Pro", layout="wide")
 
-# Custom CSS for a cleaner look
 st.markdown("""
     <style>
     .stApp { background-color: #FFFFFF; }
@@ -17,44 +16,39 @@ st.markdown("""
 st.title("🏙️ City Analysis Dashboard")
 st.markdown("---")
 
-# 2. Robust Data Loading with strict cleaning
+# 2. Load Data
 @st.cache_data
 def load_data():
     tsne_df = pd.read_csv('tsne_data.csv')
+    # radar_df index is the Cluster ID (1, 2, 3...)
     radar_df = pd.read_csv('radar_data.csv', index_col=0)
     
-    # FORCED CLEANING: Remove spaces, force strings, ensure case match
     tsne_df['City'] = tsne_df['City'].astype(str).str.strip()
-    radar_df.index = radar_df.index.astype(str).str.strip()
-    
     return tsne_df, radar_df
 
 try:
     df_tsne, df_radar = load_data()
-    df_tsne['Cluster label'] = df_tsne['Cluster label'].astype(str)
     
-    # Sidebar Info
-    st.sidebar.header("Data Health Check")
-    st.sidebar.write(f"Total Cities in t-SNE: **{len(df_tsne)}**")
-    st.sidebar.write(f"Total Cities in Radar Data: **{len(df_radar)}**")
-
+    # Ensure Cluster labels are treated as strings for the 3D plot colors
+    # and as integers for the Radar data lookup
+    df_tsne['Cluster label'] = df_tsne['Cluster label'].astype(int)
+    
     col1, col2 = st.columns([3, 2], gap="large")
 
     with col1:
         st.subheader("Cluster Mapping (3D)")
         
-        # Clean White 3D Plot
         fig_tsne = px.scatter_3d(
             df_tsne, 
             x='tsne_1', y='tsne_2', z='tsne_3',
-            color='Cluster label',
+            color=df_tsne['Cluster label'].astype(str), # String for discrete colors
             hover_name='City',
-            height=700,
+            height=750,
             template="plotly_white",
             color_discrete_sequence=px.colors.qualitative.Prism
         )
         
-        # REMOVE CLUTTER: No spikes, clean grid
+        # REMOVE SPIDERWEB LINES: Disable spikes and clean background
         fig_tsne.update_layout(
             scene=dict(
                 xaxis=dict(showspikes=False, gridcolor="#eeeeee", showbackground=False),
@@ -67,25 +61,28 @@ try:
         st.plotly_chart(fig_tsne, use_container_width=True)
 
     with col2:
-        st.subheader("Cluster Profile")
+        st.subheader("Cluster Feature Profile")
         
+        # 1. Select Cluster
         cluster_list = sorted(df_tsne['Cluster label'].unique())
-        selected_cluster = st.selectbox("Choose a Cluster:", options=cluster_list)
+        selected_cluster = st.selectbox("Select a Cluster to analyze:", options=cluster_list)
         
-        # Match cities between the two files
-        cities_in_cluster = df_tsne[df_tsne['Cluster label'] == selected_cluster]['City'].tolist()
-        
-        # Find the intersection (cities present in both)
-        valid_cities = [c for c in cities_in_cluster if c in df_radar.index]
-        
-        if valid_cities:
-            cluster_avg = df_radar.loc[valid_cities].mean()
+        # 2. Get the pre-calculated average from your radar_df
+        # We use .loc[selected_cluster] because your CSV index is the Cluster ID
+        try:
+            cluster_stats = df_radar.loc[selected_cluster]
             
-            # Professional Radar
+            # Prepare data for Radar (closing the loop)
+            values = cluster_stats.values.tolist()
+            labels = cluster_stats.index.tolist()
+            values += values[:1]
+            labels += labels[:1]
+            
+            # 3. Create the Radar Chart
             fig_radar = go.Figure()
             fig_radar.add_trace(go.Scatterpolar(
-                r=cluster_avg.values,
-                theta=cluster_avg.index,
+                r=values,
+                theta=labels,
                 fill='toself',
                 fillcolor='rgba(0, 104, 201, 0.2)',
                 line=dict(color='#0068C9', width=2),
@@ -94,20 +91,29 @@ try:
             
             fig_radar.update_layout(
                 polar=dict(
-                    radialaxis=dict(visible=True, range=[0, df_radar.values.max()]),
+                    radialaxis=dict(
+                        visible=True, 
+                        range=[0, 1],
+                        tickvals=[0, 0.5, 1],
+                        gridcolor="#eeeeee"
+                    ),
+                    angularaxis=dict(gridcolor="#eeeeee")
                 ),
                 showlegend=False,
                 template="plotly_white",
-                height=450
+                height=500
             )
             st.plotly_chart(fig_radar, use_container_width=True)
-            st.success(f"Averaging **{len(valid_cities)}** cities from this cluster.")
-        else:
-            st.error("No Radar Data Match Found")
-            st.write("The names in your Radar CSV don't match the names in your t-SNE CSV.")
-            with st.expander("Troubleshoot Names"):
-                st.write("Expected Names (from t-SNE):", cities_in_cluster[:5])
-                st.write("Available Names (from Radar):", list(df_radar.index)[:5])
+            
+            # Show which cities are in this cluster
+            cities_in_cluster = df_tsne[df_tsne['Cluster label'] == selected_cluster]['City'].tolist()
+            st.success(f"This profile represents the average of **{len(cities_in_cluster)}** cities.")
+            with st.expander("Show Cities in this Cluster"):
+                st.write(", ".join(sorted(cities_in_cluster)))
+                
+        except KeyError:
+            st.error(f"Cluster {selected_cluster} not found in radar_data.csv")
+            st.write("Available IDs in file:", df_radar.index.tolist())
 
 except Exception as e:
-    st.error(f"Critical Error: {e}")
+    st.error(f"Error: {e}")
